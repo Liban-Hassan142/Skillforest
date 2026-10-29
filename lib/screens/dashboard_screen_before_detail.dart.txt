@@ -1,0 +1,98 @@
+import 'package:flutter/material.dart';
+
+import '../models/skill.dart';
+import '../services/database_helper.dart';
+import '../widgets/skill_card.dart';
+import 'skill_form_screen.dart';
+
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  List<Skill> _skills = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSkills();
+  }
+
+  Future<void> _loadSkills() async {
+    try {
+      final rows = await DatabaseHelper.instance.getSkills();
+
+      final skills = rows.map((row) {
+        return Skill(
+          skillId: row['skillId'] as int,
+          name: row['name'] as String,
+          category: row['category'] as String,
+          difficulty: row['difficulty'] as int,
+          targetHours: row['targetHours'] as int,
+          treeLevel: row['treeLevel'] as int,
+          dateCreated: row['dateCreated'] as String,
+        );
+      }).toList();
+
+      if (!mounted) return;
+      setState(() {
+        _skills = skills;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not load skills: $error')));
+    }
+  }
+
+  Future<void> _addSkill() async {
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (context) => const SkillFormScreen()),
+    );
+
+    if (saved == true) {
+      await _loadSkills();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('SkillForest')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _skills.isEmpty
+          ? const Center(
+              child: Text(
+                'Your forest is empty!\nTap + to plant your first skill.',
+                textAlign: TextAlign.center,
+              ),
+            )
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                const Text(
+                  '🌲 Your Forest',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 16),
+                ..._skills.map(
+                  (skill) => SkillCard(skill: skill, onTap: () {}),
+                ),
+              ],
+            ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _addSkill,
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
