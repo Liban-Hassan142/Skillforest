@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../services/practice_advisor.dart';
 
 import '../models/skill.dart';
 import '../services/database_helper.dart';
@@ -21,12 +24,123 @@ class _SkillDetailScreenState extends State<SkillDetailScreen> {
   int _totalMinutes = 0;
   int _treeLevel = 1;
   bool _saving = false;
+  int _dailyGoal = 30;
 
   @override
   void initState() {
     super.initState();
     _treeLevel = widget.skill.treeLevel;
     _loadSessions();
+    _loadGoal();
+  }
+
+  Future<void> _loadGoal() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) setState(() => _dailyGoal = prefs.getInt('dailyGoal') ?? 30);
+  }
+
+  Future<void> _editSession(Map<String, Object?> session) async {
+    final id = widget.skill.skillId;
+    if (id == null) return;
+    final minutes = TextEditingController(
+      text: '${session['durationMinutes']}',
+    );
+    final notes = TextEditingController(text: '${session['notes'] ?? ''}');
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final save = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Edit Practice Session'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: minutes,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Minutes'),
+              ),
+              TextField(
+                controller: notes,
+                decoration: const InputDecoration(labelText: 'Notes'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      );
+      if (save != true || !mounted) return;
+      final value = int.tryParse(minutes.text.trim());
+      if (value == null || value <= 0) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Enter valid minutes greater than zero.'),
+          ),
+        );
+        return;
+      }
+      await DatabaseHelper.instance.updatePracticeSession(
+        sessionId: session['sessionId'] as int,
+        skillId: id,
+        durationMinutes: value,
+        notes: notes.text,
+      );
+      await _loadSessions();
+    } catch (error) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Could not edit session: $error')),
+        );
+      }
+    } finally {
+      minutes.dispose();
+      notes.dispose();
+    }
+  }
+
+  Future<void> _deleteSession(Map<String, Object?> session) async {
+    final id = widget.skill.skillId;
+    if (id == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Practice Session?'),
+        content: const Text('This session will be removed from your history.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await DatabaseHelper.instance.deletePracticeSession(
+        sessionId: session['sessionId'] as int,
+        skillId: id,
+      );
+      await _loadSessions();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not delete session: $error')),
+        );
+      }
+    }
   }
 
   Future<void> _loadSessions() async {
@@ -144,6 +258,24 @@ class _SkillDetailScreenState extends State<SkillDetailScreen> {
         ? (_totalMinutes / targetMinutes).clamp(0.0, 1.0)
         : 0.0;
 
+    final suggestion = PracticeAdvisor.suggest(
+      dailyGoal: _dailyGoal,
+      difficulty: widget.skill.difficulty,
+      completedMinutesToday: _sessions
+          .where((session) {
+            final date = DateTime.tryParse('${session['sessionDate']}');
+            final now = DateTime.now();
+            return date != null &&
+                date.year == now.year &&
+                date.month == now.month &&
+                date.day == now.day &&
+                session['completed'] == 1;
+          })
+          .fold<int>(
+            0,
+            (sum, session) => sum + (session['durationMinutes'] as int? ?? 0),
+          ),
+    );
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.skill.name),
@@ -192,6 +324,53 @@ class _SkillDetailScreenState extends State<SkillDetailScreen> {
           const SizedBox(height: 8),
           Text('Goal: ${widget.skill.targetHours} hours'),
           const SizedBox(height: 28),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Smart Practice Helper (local rules)',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    suggestion == null
+                        ? 'Invalid goal or difficulty.'
+                        : suggestion.minutes == 0
+                        ? 'Daily goal complete!'
+                        : 'Suggested session: ${suggestion.minutes} minutes',
+                  ),
+                  const SizedBox(height: 6),
+                  Text(suggestion?.explanation ?? 'Check your saved settings.'),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Baseline: ${PracticeAdvisor.baseline} minutes. '
+                    'Suggestion uses your daily goal, skill difficulty, and today\'s practice.',
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: suggestion == null || suggestion.minutes == 0
+                        ? null
+                        : () {
+                            _minutesController.text = suggestion.minutes
+                                .toString();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Suggestion applied. You can edit minutes before saving.',
+                                ),
+                              ),
+                            );
+                          },
+                    child: const Text('Use Suggestion (optional)'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           Text(
             'Log Practice Session',
             style: Theme.of(context).textTheme.titleLarge,
@@ -235,6 +414,20 @@ class _SkillDetailScreenState extends State<SkillDetailScreen> {
                   '${session['notes']}\n${session['sessionDate']}',
                 ),
                 isThreeLine: true,
+                trailing: Wrap(
+                  children: [
+                    IconButton(
+                      tooltip: 'Edit Session',
+                      icon: const Icon(Icons.edit_outlined),
+                      onPressed: () => _editSession(session),
+                    ),
+                    IconButton(
+                      tooltip: 'Delete Session',
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () => _deleteSession(session),
+                    ),
+                  ],
+                ),
               ),
             );
           }),

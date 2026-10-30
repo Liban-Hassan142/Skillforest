@@ -176,6 +176,40 @@ class DatabaseHelper {
     ''');
   }
 
+  Future<int> updatePracticeSession({
+    required int sessionId,
+    required int skillId,
+    required int durationMinutes,
+    required String notes,
+  }) async {
+    if (durationMinutes <= 0) {
+      throw ArgumentError('Practice time must be greater than zero.');
+    }
+    final db = await database;
+    return db.transaction((txn) async {
+      final changed = await txn.update(
+        'practice_sessions',
+        {'durationMinutes': durationMinutes, 'notes': notes.trim()},
+        where: 'sessionId = ? AND skillId = ?',
+        whereArgs: [sessionId, skillId],
+      );
+      if (changed != 1) throw StateError('Practice session not found.');
+      return changed;
+    });
+  }
+
+  Future<int> deletePracticeSession({
+    required int sessionId,
+    required int skillId,
+  }) async {
+    final db = await database;
+    return db.delete(
+      'practice_sessions',
+      where: 'sessionId = ? AND skillId = ?',
+      whereArgs: [sessionId, skillId],
+    );
+  }
+
   Future<void> close() async {
     final db = _database;
     _database = null;
